@@ -1,0 +1,228 @@
+language ESSENCE' 1.0
+
+$ cards are integers starting at 0
+$ card % numRanks = value
+$ card / numRanks = suit
+$ suit colours must alternate (black - red - black etc.)
+$ dummy card = max card + 1
+
+given numRanks : int(..)
+given numPiles : int(..)
+letting numSuits be 4
+
+letting numCards be numSuits * numRanks
+letting dummyCard be numCards
+letting maxStages be (numCards * 2)
+letting dummyStage be maxStages + 1
+letting maxTableauPileSize be numRanks + numPiles - 1
+
+letting CARDS be domain int(0..numCards-1)
+letting HALF_CARDS be domain int(0..(numCards / 2) - 1)
+letting CARDSPlusDummy be domain int(0..numCards)
+letting RANKS be domain int(1..numRanks)
+letting SUITS be domain int(1..numSuits)
+letting PILES be domain int(1..numPiles)
+letting PILE_INDEXES be domain int(1..maxTableauPileSize)
+letting STAGES be domain int(1..maxStages)
+letting DUMMY_STAGES be domain int(1..dummyStage)
+
+given tableau : matrix indexed by [ PILES, int(..) ] of CARDS
+given firstFaceUpCards : matrix indexed by [ PILES ] of int(0..numCards) $ in future should allow for pre-built piles
+given stock : matrix indexed by [ int(1..max_stock_index) ] of CARDS
+given dealN : int(1..max_stock_index) $ how many cards are dealt to the waste at once
+
+find stock_set : matrix indexed by [ CARDS ] of bool
+find tableau_set : matrix indexed by [ CARDS ] of bool
+find tableau_parents : matrix indexed by [ CARDS, int(1..2) ] of CARDSPlusDummy
+find tableau_twin : matrix indexed by [ CARDS ] of CARDSPlusDummy
+
+find first_moved_stage : matrix indexed by [ CARDS ] of STAGES $ the stage at which a card is first moved
+find tableau_face_up_stage : matrix indexed by [ CARDS ] of DUMMY_STAGES $ the stage at which a card is face-up on the tableau
+find foundation_stage : matrix indexed by [ CARDS ] of STAGES $ the stage at which a card is on the foundation
+find stock_available_stage : matrix indexed by [ CARDS ] of STAGES $ the stage at which a stock card is available
+
+find stage_first_space: matrix indexed by [ PILES ] of STAGES $ the stage at which a pile can first act as a space
+find king_pile: matrix indexed by [ SUITS ] of int(0..numPiles) $ the pile a given king is moved to or 0 if not moved
+find king_played_space_stage : matrix indexed by [ SUITS ] of DUMMY_STAGES $ the stage where a king is first moved to a space
+
+such that
+
+$ Channeling
+
+$ Stock set
+forAll card : CARDS .
+    stock_set[card] = exists i : int(1..max_stock_index) . stock[i] = card,
+
+$ tableau card set
+forAll card : CARDS .
+    tableau_set[card] = exists pile : PILES . exists i : PILE_INDEXES .
+        tableau[pile, i] = card,
+
+$ tableau parents
+$ kings
+forAll card : CARDS .
+    card % numRanks = numRanks - 1 -> 
+        tableau_parents[card, 1] = dummyCard 
+        /\ tableau_parents[card, 2] = dummyCard,
+$ others - symmetry
+forAll card : CARDS .
+    card % numRanks < numRanks - 1 -> 
+        tableau_parents[card, 1] < tableau_parents[card, 2]
+        /\ forAll i : int(1..2) .
+            tableau_parents[card, i] != dummyCard,
+$ others - value and suit
+forAll card : CARDS .
+    card % numRanks < numRanks - 1 -> 
+        forAll i : int(1..2) . exists otherCard : CARDS .
+            tableau_parents[card, i] = otherCard
+            /\ otherCard % numRanks = 1 + card % numRanks
+            /\ ((otherCard / numRanks) % 2) != ((card / numRanks) % 2),
+
+$ tableau twins
+forAll card : CARDS .
+    tableau_twin[card] != dummyCard
+    /\ tableau_twin[card] % numRanks = card % numRanks
+    /\ tableau_twin[card] != card
+    /\ (tableau_twin[card] / numRanks) % 2 = (card / numRanks) % 2,
+
+
+$ stock stage
+$ When a stock card becomes available
+forAll i : int(1..max_stock_index) .
+    (
+        (i-1) / dealN = i / dealN $ indices in the same stock group
+        /\ i + 1 <= max_stock_index -> 
+            stock_available_stage[stock[i]] > first_moved_stage[stock[i + 1]] $ must be played after the covering stock card
+    )
+    \/ exists k : int(1..i) . $ or trying to find a playable card in the stock below the group
+        k < i 
+        /\ k / dealN = (i-1) / dealN 
+        /\ (k-1) / dealN < (i-1) / dealN $ k is the largest index below the stock group
+        /\ stock_available_stage[stock[i]] > min([first_moved_stage[stock[j]] | j : int(1..k)]),
+
+$ Channelling stock availability to other variables
+forAll card : CARDS .
+    stock_set[card] -> 
+        first_moved_stage[card] >= stock_available_stage[card]
+        /\ foundation_stage[card] >= stock_available_stage[card]
+        /\ tableau_face_up_stage[card] >= stock_available_stage[card],
+
+
+$ foundation stage
+$ A card must be played to the foundation after its foundation dependency
+forAll card : CARDS .
+    (stock_set[card] \/ tableau_set[card]) $ not already on the foundation
+    /\ card % numRanks > 0 -> $ non ace
+        foundation_stage[card] > foundation_stage[card - 1],
+
+
+$ tableau stage
+$ A card must be played to the tableau after one of its tableau dependencies
+forAll card : CARDS .
+    card % numRanks < numRanks - 1 $ king exception
+    /\ !tableau_set[card]  $ all non-tableau cards
+    /\ tableau_face_up_stage[card] != dummyStage -> $ was played to the tableau
+        tableau_face_up_stage[card] > min(
+                tableau_face_up_stage[tableau_parents[card, 1]],
+                tableau_face_up_stage[tableau_parents[card, 2]]
+            ),
+
+$ When a face-down card becomes available
+forAll pile : PILES . forAll i : int(0..numCards) .
+    i <= firstFaceUpCards[pile] /\ i > 1 -> 
+        first_moved_stage[tableau[pile, i - 1]] > first_moved_stage[tableau[pile, i]]
+        /\ foundation_stage[tableau[pile, i - 1]] > first_moved_stage[tableau[pile, i]]
+        /\ tableau_face_up_stage[tableau[pile, i - 1]] > first_moved_stage[tableau[pile, i]],
+
+$ A card must be played after at least one of its parents are played
+forAll card : CARDS .
+    card % numRanks > 0 $ ace exception
+    /\ tableau_face_up_stage[card] != dummyStage $ was played to the tableau
+    /\ tableau_parents[card, 1] != dummyCard -> $ king exception
+        first_moved_stage[card] > foundation_stage[card - 1]
+        \/ first_moved_stage[card] > min(
+                tableau_face_up_stage[tableau_parents[card, 1]],
+                tableau_face_up_stage[tableau_parents[card, 2]]
+            ),
+
+$ A card which wasn't played to the tableau must be played after the foundation parent
+forAll card : CARDS .
+    card % numRanks > 0 $ ace exception
+    /\ tableau_face_up_stage[card] = dummyStage  -> $ not played to the tableau
+        first_moved_stage[card] > foundation_stage[card - 1],
+
+
+$ tableau spaces
+$ originally empty piles act as a space immediately
+forAll pile : PILES .
+    firstFaceUpCards[pile] = 0 -> 
+        (stage_first_space[pile] = 1),
+
+$ non-empty piles act as a space after the stage the bottomost card has been moved
+forAll pile : PILES .
+    firstFaceUpCards[pile] > 0 -> 
+        (stage_first_space[pile] = 1 + first_moved_stage[tableau[pile, 1]]),
+
+$ A king must be played to a pile after it is available
+forAll suit : SUITS .
+    king_pile[suit] > 0 -> 
+        (king_played_space_stage[suit] >= stage_first_space[king_pile[suit]]),
+
+$ Two kings can't be played to the same pile at the same time
+forAll suit, otherSuit : SUITS .
+    suit != otherSuit 
+    /\ king_pile[suit] = king_pile[otherSuit] 
+    /\ king_pile[suit] > 0 -> 
+        (
+            (king_played_space_stage[suit] > foundation_stage[(numRanks * otherSuit) - 2])
+            \/ 
+            (king_played_space_stage[otherSuit] > foundation_stage[(numRanks * suit) - 2])
+        ),
+
+$ A king must be played to a space or to the foundation
+forAll suit : SUITS .
+    king_pile[suit] = 0 -> $ if the king hasn't been moved to a space
+        first_moved_stage[(numRanks * suit) - 1] > foundation_stage[(numRanks * suit) - 2],
+forAll suit : SUITS .
+    king_pile[suit] > 0 -> $ if the king has been moved to a space
+        first_moved_stage[(numRanks * suit) - 1] = king_played_space_stage[suit] 
+        \/ 
+        first_moved_stage[(numRanks * suit) - 1] > foundation_stage[(numRanks * suit) - 2],
+
+$ Enforcing "dummy" pile and stages for king variables
+forAll suit : SUITS .
+    (king_played_space_stage[suit] = dummyStage) = (king_pile[suit] = 0),
+
+$ a bottommost tableau king can't be played to a different space
+forAll pile : PILES .
+    firstFaceUpCards[pile] > 0 /\ tableau[pile, 1] % numRanks = numRanks - 1 -> 
+        (king_pile[(tableau[pile, 1] / numRanks) + 1] = 0),
+
+$ non-tableau king tableau parent stage
+forAll suit : SUITS .
+    king_pile[suit] > 0 $ king was played to a space
+    /\ !tableau_set[(numRanks * suit) - 1] -> $ all non-tableau kings
+        tableau_face_up_stage[(numRanks * suit) - 1] = king_played_space_stage[suit], $ act as a tableau parent after it has been played to the tableau
+forAll suit : SUITS .
+    king_pile[suit] = 0 $ king wasn't played to a space
+    /\ !tableau_set[(numRanks * suit) - 1] -> $ all non-tableau kings
+        tableau_face_up_stage[(numRanks * suit) - 1] = dummyStage, $ wasn't played to the tableau
+
+
+$ two cards cannot be played to the same tableau parent at the same time
+forAll card : HALF_CARDS .
+    tableau_parents[card, 1] != dummyCard $ king exception
+    /\ first_moved_stage[card] < foundation_stage[card] $ the card is played to the tableau before the foundation
+    /\ first_moved_stage[tableau_twin[card]] < foundation_stage[tableau_twin[card]] $ the twin is played to the tableau before the foundation
+    /\ (exists i : int(1..2) . $ exists a tableau parent which
+        tableau_parents[card, i] != dummyCard $ isn't dummy
+        /\ tableau_face_up_stage[tableau_parents[card, i]] > max(
+                first_moved_stage[card],
+                first_moved_stage[tableau_twin[card]]
+            ) $ can only act as a tableau parent after the card twins have been played
+    ) -> (
+        first_moved_stage[card] > foundation_stage[tableau_twin[card]]
+        \/ first_moved_stage[tableau_twin[card]] > foundation_stage[card]
+    ),
+
+true
