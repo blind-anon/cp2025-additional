@@ -1,0 +1,256 @@
+language ESSENCE' 1.0
+
+$ matrix indexes
+letting result be 1
+letting time be 2
+
+$ result encodings
+letting unknown be 2
+letting solved be 1
+letting unsolvable be 0
+
+given timeLimit : int(..)
+letting par10Limit be timeLimit * 10
+
+given data : matrix indexed by [ int(1..numInstances), int(1..numModels), int(1..2)] of int(0..)
+
+letting INSTANCES be domain int(1..numInstances)
+letting MODELS be domain int(1..numModels)
+letting TIME_LIMIT be domain int(0..timeLimit)
+
+given modelRef : matrix indexed by [ MODELS ] of MODELS
+
+find order : matrix indexed by [ MODELS ] of MODELS
+find timePortion : matrix indexed by [ MODELS ] of TIME_LIMIT
+find par10 : int(0..par10Limit * numModels * numInstances)
+
+find executionTime : matrix indexed by [ INSTANCES ] of int(0..par10Limit)
+find leftoverTime : matrix indexed by [ INSTANCES, MODELS ] of TIME_LIMIT
+find timeMod : matrix indexed by [ INSTANCES, MODELS ] of TIME_LIMIT
+find hasResult : matrix indexed by [ INSTANCES ] of bool
+find minSolvableModel : matrix indexed by [ INSTANCES ] of MODELS
+find maxNonZeroModel : MODELS
+
+minimising par10
+
+such that
+
+$ time to reduce the execution time by from duplicated models
+forAll i : int(1..numModels - 1) . forAll j : int(i + 1..numModels) .
+    modelRef[i] = modelRef[j] 
+    /\ (
+        !exists otherModel : int(i + 1..j - 1) .
+            modelRef[i] = modelRef[otherModel]
+    ) ->
+    forAll instance : INSTANCES .
+        timeMod[instance, j] = min(data[instance, i, time] - timeMod[instance, i], timePortion[i]),
+$ first model has zero timemod
+forAll model : MODELS .
+    timePortion[model] > 0
+    /\ 
+    (
+        !exists otherModel : MODELS . 
+            model != otherModel
+            /\ modelRef[model] = modelRef[otherModel]
+            /\ order[otherModel] < order[model]
+            /\ timePortion[otherModel] > 0
+    ) ->
+    forAll instance : INSTANCES .
+        timeMod[instance, model] = 0,
+$ zero timeportion models have zero timemod
+forAll model : MODELS .
+    timePortion[model] = 0 -> 
+    forAll instance : INSTANCES .
+        timeMod[instance, model] = 0,
+$ unique models have zero timemod
+forAll model : MODELS .
+    !(exists otherModel : MODELS .
+        model != otherModel
+        /\ modelRef[model] = modelRef[otherModel]
+    ) -> (
+        forAll instance : INSTANCES .
+            timeMod[instance, model] = 0
+    ),
+
+$ zero leftover time for timedout non-last models
+forAll instance : INSTANCES .
+    forAll model : MODELS .
+        order[model] < numModels /\
+        data[instance, model, time] - timeMod[instance, model] > timePortion[model] ->
+            leftoverTime[instance, model] = 0,
+$ zero leftover time for last models
+forAll instance : INSTANCES .
+    forAll model : MODELS .
+        order[model] = numModels ->
+            leftoverTime[instance, model] = 0,
+$ calculate leftover time for non-timedout non-last models
+forAll instance : INSTANCES .
+    forAll model : MODELS .
+        order[model] < numModels /\
+        data[instance, model, time] <= timePortion[model] ->
+        leftoverTime[instance, model] = timePortion[model] - (data[instance, model, time] - timeMod[instance, model]),
+
+allDiff(order),
+
+timeLimit = sum(timePortion),
+
+$ symmetry breaking duplicate models
+forAll i : int(1..numModels - 1) . forAll j : int(i + 1..numModels) .
+    modelRef[i] = modelRef[j]
+    /\ timePortion[j] = 0 ->
+        timePortion[i] = 0,
+forAll i : int(1..numModels - 1) . forAll j : int(i + 1..numModels) .
+    modelRef[i] = modelRef[j] /\
+    timePortion[j] != 0 -> (
+        order[i] < order[j]
+        /\
+        timePortion[i] < timePortion[j]
+    ),
+
+$ symmetry breaking adjacent duplicated models
+forAll i : int(1..numModels - 1) . forAll j : int(i + 1..numModels) .
+    modelRef[i] = modelRef[j]
+    /\ timePortion[j] > 0
+    /\ timePortion[i] > 0 ->
+        |order[i] - order[j]| > 1,
+
+$ symmetry breaking for 0 time models
+forAll model : MODELS .
+    timePortion[model] = 0 -> (
+        !(exists otherModel : MODELS .
+            otherModel != model
+            /\ modelRef[otherModel] != modelRef[model]
+            /\ order[otherModel] < order[model]
+            /\ timePortion[otherModel] > 0
+        )
+    ),
+
+$ find if the instance is solvable within the time limit
+forAll instance : INSTANCES .
+    hasResult[instance] = (
+        (
+            exists model : MODELS . 
+                order[model] < numModels
+                /\ data[instance, model, result] != unknown
+                /\ data[instance, model, time] - timeMod[instance, model] <= timePortion[model]
+        )
+        \/
+        (
+            exists model : MODELS . 
+                order[model] = numModels
+                /\ data[instance, model, result] != unknown
+                /\ data[instance, model, time] - timeMod[instance, model] <= timePortion[model] + sum(leftoverTime[instance, ..])
+        )
+    ),
+
+$ find the earliest solvable model for each instance
+forAll instance : INSTANCES .
+    hasResult[instance] -> (
+        (
+            exists model : MODELS .
+                order[model] < numModels
+                /\ data[instance, model, result] != unknown
+                /\ data[instance, model, time] - timeMod[instance, model] <= timePortion[model]
+                /\ (!exists otherModel : MODELS .
+                    order[otherModel] < order[model]
+                    /\ data[instance, otherModel, result] != unknown
+                    /\ data[instance, otherModel, time] - timeMod[instance, otherModel] <= timePortion[otherModel]
+                )
+                /\ minSolvableModel[instance] = model
+        )
+        \/
+        (
+            exists model : MODELS .
+                order[model] = numModels
+                /\ data[instance, model, result] != unknown
+                /\ data[instance, model, time] - timeMod[instance, model] <= timePortion[model] + sum(leftoverTime[instance, ..])
+                /\ (!exists otherModel : MODELS .
+                    order[otherModel] < order[model]
+                    /\ data[instance, otherModel, result] != unknown
+                    /\ data[instance, otherModel, time] - timeMod[instance, otherModel] <= timePortion[otherModel]
+                )
+                /\ minSolvableModel[instance] = model
+        )
+    ),
+
+$ find the par10 times for each instance
+forAll instance : INSTANCES .
+    !hasResult[instance] -> (
+        executionTime[instance] = par10Limit
+    ),
+forAll instance : INSTANCES .
+    hasResult[instance] -> (
+        executionTime[instance] = (sum model : MODELS .
+            (
+                (order[model] <= order[minSolvableModel[instance]])
+                *
+                (order[model] < numModels)
+                *
+                min(timePortion[model], data[instance, model, time] - timeMod[instance, model])
+            )
+            +
+            (
+                (order[model] <= order[minSolvableModel[instance]])
+                *
+                (order[model] = numModels)
+                *
+                (data[instance, model, time] - timeMod[instance, model])
+            )
+        )
+    ),
+
+$ channelling execution times into objective variable
+par10 = sum(executionTime),
+
+$ $ logarithmic split times
+$ forAll model : MODELS .
+$     timePortion[model] != 0 -> 
+$         (
+$             exists pow10 : int(1..7) .
+$                 timePortion[model] >= 10**(pow10 - 1)
+$                 /\ timePortion[model] < 10**pow10
+$                 /\ (
+$                     timePortion[model] % 10**(pow10 - 1) = 0
+$                 )
+$         ),
+
+$ pseudo-logarithmic split times
+forAll model : MODELS .
+    model != maxNonZeroModel /\
+    timePortion[model] != 0 -> 
+        (
+            (
+                timePortion[model] >= 100
+                /\ timePortion[model] < 600
+                ->
+                    (
+                        timePortion[model] % 10 = 0
+                    )
+            )
+            /\
+            (
+                timePortion[model] >= 600
+                ->
+                    (
+                        timePortion[model] % 100 = 0
+                    )
+            )
+        ),
+
+$ max non zero model
+exists model : MODELS .
+    maxNonZeroModel = model
+    /\ timePortion[model] != 0
+    /\ (!exists otherModel : MODELS .
+        timePortion[otherModel] != 0
+        /\ order[otherModel] > order[model]
+    ),
+
+$ set timeout of last model
+timePortion[maxNonZeroModel] = timeLimit - (
+    sum otherModel : MODELS .
+        (otherModel != maxNonZeroModel) *
+        timePortion[otherModel]
+),
+
+true
